@@ -5,8 +5,8 @@ classdef Processor < handle
 		stimulus_data
 
 		on_resp double % the following three are the sorted responses
-		base_resp double
-		blank_resp double 
+		pre_resp double
+		post_resp double 
 
 		data double % response
 	end
@@ -35,24 +35,24 @@ classdef Processor < handle
 
 		function sortData(obj)
 			% extract stimulus data variables
-			[blank_frames, base_frames, on_frames, relax_frames, presentation_frames, repeat_frames] = obj.getEpochFrames();
+			[blank_frames, pre_frames, on_frames, post_frames, presentation_frames, repeat_frames] = obj.getEpochFrames();
 
 			% Main sorting loop
 			for r = 1:obj.stimulus_data.n_repeats
 				curr_frame = (r - 1) * repeat_frames;
-				obj.blank_resp(r, :, :) = obj.raw_data(curr_frame : curr_frame + blank_frames - 1);
+				obj.post_resp(r, :, :) = obj.raw_data(curr_frame : curr_frame + blank_frames - 1);
 				for p = 1:obj.stimulus_data.n_presentations
 					curr_frame = (r - 1) * repeat_frames + (p - 1) * presentation_frames;
-					obj.base_resp(r, p ,:, :) = obj.raw_data(curr_frame : curr_frame + base_frames - 1);
-					obj.on_resp(r, p, :, :) = obj.raw_data(curr_frame + base_frames :...
-					 curr_frame + base_frames + on_frames + relax_frames - 1);
+					obj.pre_resp(r, p ,:, :) = obj.raw_data(curr_frame : curr_frame + pre_frames - 1);
+					obj.on_resp(r, p, :, :) = obj.raw_data(curr_frame + pre_frames :...
+					 curr_frame + pre_frames + on_frames + post_frames - 1);
 				end
 			end
 
 			% It's going to be one or the other, never do both
 			if blank_frames ~= 0
 				obj.subtractBlank();
-			elseif base_frames ~= 0
+			elseif pre_frames ~= 0
 				obj.subtractBaseline();
 			else
 				obj.data = obj.on_resp; % No subtraction or normalization at all
@@ -64,7 +64,7 @@ classdef Processor < handle
 
 		function subtractBlank(obj)
 			for r = 1:obj.stimulus_data.n_repeats
-				blank = squeeze(mean(obj.blank_resp(r, :, :), 2));
+				blank = squeeze(mean(obj.post_resp(r, :, :), 2));
 				obj.data(r, :, :, :) = obj.raw_data(r, :, :, :) - blank;
 			end
 		end
@@ -84,12 +84,12 @@ classdef Processor < handle
 			end
 
 			blank_frames = obj.stimulus_data.blank_time * fs;
-			base_frames = obj.stimulus_data.base_time * fs;
+			pre_frames = obj.stimulus_data.base_time * fs;
 			on_frames = obj.stimulus_data.on_time * fs;
-			relax_frames = obj.stimulus_data.relax_time * fs;
+			post_frames = obj.stimulus_data.relax_time * fs;
 
 			% Calculating additional parameters
-			presentation_frames = base_frames + on_frames + relax_frames;
+			presentation_frames = pre_frames + on_frames + post_frames;
 			repeat_frames = presentation_frames .* obj.stimulus_data.n_presentations;
 		end
 	end
