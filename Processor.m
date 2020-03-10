@@ -3,6 +3,7 @@ classdef Processor < handle
 		raw_data double % this is the main data matrix
 		initial_dimensions
 		stimulus_data
+		twop_flag = false;
 
 		on_resp double % the following three are the sorted responses
 		pre_resp double
@@ -14,82 +15,74 @@ classdef Processor < handle
 		function obj = Processor(raw_data)
 			if isa(raw_data, 'struct')
 				obj.raw_data = raw_data.DFF;
-				obj.raw_data = permute(obj.raw_data, [2, 1]);
-			elseif isa(raw_data, 'double')
+				obj.raw_data = permute(obj.raw_data, [3, 1, 2]); % adding a dimension to 2p data
+				obj.twop_flag = true;
+			elseif isa(raw_data, 'single')
 				obj.raw_data = raw_data;
-				obj.raw_data = permute(obj.raw_data, [3, 1, 2]); % Make sure to remember to "unpermute" this later
 			else
 				error('Your data type does not comply, are you using data from our lab?')
 			end
-			% Reshape the data so we're always dealing with the same dimensional data (thanks Tyler)
-			obj.initial_dimensions = size(obj.raw_data);
-			obj.raw_data = reshape(obj.raw_data, size(obj.raw_data, 1), []);			
+
 			obj.getStimulusData();
 		end
 
-		function getStimulusData();
+		function getStimulusData(obj);
 			disp('Choose your stimulus data file')
 			[fn, pn] = uigetfile('.mat');
 			obj.stimulus_data = importdata([pn, fn]);
 		end
 
 		function sortData(obj)
+			disp('Sorting data...')
 			% extract stimulus data variables
-			[blank_frames, pre_frames, on_frames, post_frames, presentation_frames, repeat_frames] = obj.getEpochFrames();
-
+			[pre_frames, on_frames, post_frames, presentation_frames, repeat_frames] = obj.getEpochFrames();
 			% Main sorting loop
 			for r = 1:obj.stimulus_data.n_repeats
-				curr_frame = (r - 1) * repeat_frames;
-				obj.post_resp(r, :, :) = obj.raw_data(curr_frame : curr_frame + blank_frames - 1);
+				disp(r)
 				for p = 1:obj.stimulus_data.n_presentations
 					curr_frame = (r - 1) * repeat_frames + (p - 1) * presentation_frames;
-					obj.pre_resp(r, p ,:, :) = obj.raw_data(curr_frame : curr_frame + pre_frames - 1);
-					obj.on_resp(r, p, :, :) = obj.raw_data(curr_frame + pre_frames :...
-					 curr_frame + pre_frames + on_frames + post_frames - 1);
+					obj.pre_resp(:, :, :, p, r) = obj.raw_data(:, :, curr_frame + 1: curr_frame + pre_frames);
+					obj.on_resp(:, :, :, p, r) = obj.raw_data(:, :, curr_frame + pre_frames + 1:...
+						curr_frame + pre_frames + on_frames );
+					obj.post_resp(:, :, :, p, r) = obj.raw_data(:, :, curr_frame + pre_frames + on_frames + 1:...
+						curr_frame + pre_frames + on_frames + post_frames ); 
 				end
 			end
 
 			% It's going to be one or the other, never do both
-			if blank_frames ~= 0
-				obj.subtractBlank();
-			elseif pre_frames ~= 0
+			if pre_frames ~= 0
 				obj.subtractBaseline();
 			else
 				obj.data = obj.on_resp; % No subtraction or normalization at all
 			end
 
-			~~~~obj.data = reshape(obj.data, obj.initial_dimensions);
-			% What do we wan to do with obj.data at this point? repermute it?
-		end
-
-		function subtractBlank(obj)
-			for r = 1:obj.stimulus_data.n_repeats
-				blank = squeeze(mean(obj.post_resp(r, :, :), 2));
-				obj.data(r, :, :, :) = obj.raw_data(r, :, :, :) - blank;
+			if obj.twop_flag
+				obj.data = squeeze(obj.data);
 			end
 		end
 
 		function subtractBaseline(obj)
+			disp('Subtracting baseline...')
 			for r = 1:obj.stimulus_data.n_repeats
 				for p = 1:obj.stimulus_data.n_presentations
-					baseline = squeeze(mean(obj.baseline_resp(r, p, :, :, 2)));
-					obj.data(r, p, :, :) = obj.raw_data(r, p, :, :) - baseline;
+					baseline = squeeze(mean(obj.pre_resp(:, :, :, p, r), 3));
+					obj.data(:, :, :, p, r) = obj.on_resp(:, :, :, p, r) - baseline;
 				end
 			end
 		end
 
-		function getEpochFrames(obj, fs)
+		function [pre_frames, on_frames, post_frames, presentation_frames, repeat_frames] = getEpochFrames(obj, fs)
 			if nargin < 2 || isempty(fs)
 				fs = 10;
 			end
 
-			blank_frames = obj.stimulus_data.blank_time * fs;
-			pre_frames = obj.stimulus_data.base_time * fs;
+			pre_frames = obj.stimulus_data.pre_time * fs;
 			on_frames = obj.stimulus_data.on_time * fs;
-			post_frames = obj.stimulus_data.relax_time * fs;
+			post_frames = obj.stimulus_data.post_time * fs;
 
 			% Calculating additional parameters
 			presentation_frames = pre_frames + on_frames + post_frames;
 			repeat_frames = presentation_frames .* obj.stimulus_data.n_presentations;
 		end
 	end
+end
