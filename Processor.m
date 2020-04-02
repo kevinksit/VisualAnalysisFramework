@@ -1,7 +1,6 @@
 classdef Processor < handle
 	properties
-		raw_data double % this is the main data matrix
-		initial_dimensions
+		raw_data_fn % this is the main data matrix
 		stimulus_data
 		twop_flag = false;
 
@@ -12,17 +11,8 @@ classdef Processor < handle
 		data double % response
 	end
 	methods
-		function obj = Processor(raw_data)
-			if isa(raw_data, 'struct')
-				obj.raw_data = raw_data.DFF;
-				obj.raw_data = permute(obj.raw_data, [3, 1, 2]); % adding a dimension to 2p data
-				obj.twop_flag = true;
-			elseif isa(raw_data, 'single')
-				obj.raw_data = raw_data;
-			else
-				error('Your data type does not comply, are you using data from our lab?')
-			end
-
+		function obj = Processor(raw_data_fn)
+			obj.raw_data_fn = raw_data_fn;
 			obj.getStimulusData();
 		end
 
@@ -32,41 +22,87 @@ classdef Processor < handle
 			obj.stimulus_data = importdata([pn, fn]);
 		end
 
-		function sortData(obj)
-			disp('Sorting data...')
-			% extract stimulus data variables
-			[pre_frames, on_frames, post_frames, presentation_frames, repeat_frames] = obj.getEpochFrames();
-			% Main sorting loop
-			for r = 1:obj.stimulus_data.n_repeats
-				disp(r)
-				for p = 1:obj.stimulus_data.n_presentations
-					curr_frame = (r - 1) * repeat_frames + (p - 1) * presentation_frames;
-					obj.pre_resp(:, :, :, p, r) = obj.raw_data(:, :, curr_frame + 1: curr_frame + pre_frames);
-					obj.on_resp(:, :, :, p, r) = obj.raw_data(:, :, curr_frame + pre_frames + 1:...
-						curr_frame + pre_frames + on_frames );
-					obj.post_resp(:, :, :, p, r) = obj.raw_data(:, :, curr_frame + pre_frames + on_frames + 1:...
-						curr_frame + pre_frames + on_frames + post_frames ); 
-				end
-			end
-
-			% It's going to be one or the other, never do both
-			if pre_frames ~= 0
-				obj.subtractBaseline();
-			else
-				obj.data = obj.on_resp; % No subtraction or normalization at all
-			end
-
-			if obj.twop_flag
-				obj.data = squeeze(obj.data);
+		function checkDataLength(obj, data_length, repeat_frames)
+			expected_length = repeat_frames * obj.stimulus_data.n_repeats;
+			if data_length < expected_length
+				disp('Issues with timing led to fewer frames than expected, removing last repeat...')
+				obj.stimulus_data.n_repeats = obj.stimulus_data.n_repeats - 1;
 			end
 		end
 
-		function subtractBaseline(obj)
-			disp('Subtracting baseline...')
+		function sortData(obj)
+			disp('Sorting data...')
+			% Get the data
+			raw_data = importdata(obj.raw_data_fn);
+
+			raw_data = obj.typeConvert(raw_data);
+
+			% Extract stimulus data parameters
+			[pre_frames, on_frames, post_frames, presentation_frames, repeat_frames] = obj.getEpochFrames();
+			
+			obj.checkDataLength(length(raw_data), repeat_frames);
+
+			% Preallocate arrays
+			pre_resp = zeros(size(raw_data, 1), size(raw_data, 2), pre_frames, obj.stimulus_data.n_presentations, obj.stimulus_data.n_repeats);
+
+			on_resp = zeros(size(raw_data, 1), size(raw_data, 2), on_frames + post_frames, obj.stimulus_data.n_presentations, obj.stimulus_data.n_repeats);
+
+			post_resp = zeros(size(raw_data, 1), size(raw_data, 2), post_frames, obj.stimulus_data.n_presentations, obj.stimulus_data.n_repeats);
+
+			% Sort
+
 			for r = 1:obj.stimulus_data.n_repeats
 				for p = 1:obj.stimulus_data.n_presentations
-					baseline = squeeze(mean(obj.pre_resp(:, :, :, p, r), 3));
-					obj.data(:, :, :, p, r) = obj.on_resp(:, :, :, p, r) - baseline;
+					curr_frame = (r - 1) * repeat_frames + (p - 1) * presentation_frames;
+					pre_resp(:, :, :, p, r) = raw_data(:, :, curr_frame + 1: curr_frame + pre_frames);
+					on_resp(:, :, :, p, r) = raw_data(:, :, curr_frame + pre_frames + 1:...
+						curr_frame + pre_frames + on_frames + post_frames);
+					post_resp(:, :, :, p, r) = raw_data(:, :, curr_frame + pre_frames + on_frames + 1:...
+						curr_frame + pre_frames + on_frames + post_frames ); 
+
+					if pre_frames ~= 0
+						baseline = squeeze(mean(pre_resp(:, :, :, p, r), 3));
+						data(:, :, :, p, r) = on_resp(:, :, :, p, r) - baseline;
+					else
+						data(:, :, :, p, r) = on_resp(:, :, :, p, r);
+					end
+				end
+			end
+
+			% Assign variables to properties
+			obj.pre_resp = pre_resp;
+			obj.on_resp = on_resp;
+			obj.post_resp = post_resp;
+
+			if obj.twop_flag
+				obj.data = squeeze(data);
+			else
+				obj.data = data;
+			end
+		end
+
+		function out = typeConvert(obj, raw_data)
+			switch class(raw_data)
+			case 'struct'
+				raw_data = raw_data.DFF;
+				out = permute(raw_data, [3, 1, 2]); % adding a dimension to 2p data
+				obj.twop_flag = true;
+			case 'single'
+				out = raw_data;
+			otherwise
+				error('Your data type does not comply, are you using data from our lab?')
+			end
+		end
+
+		function out = subtractBaseline(obj)
+			disp('Subtracting baseline...')
+			out = zeros(size(obj.on_resp));
+			pre_resp = obj.pre_resp;
+			on_resp = obj.on_resp;
+			for r = 1:obj.stimulus_data.n_repeats
+				for p = 1:obj.stimulus_data.n_presentations
+					baseline = squeeze(mean(pre_resp(:, :, :, p, r), 3));
+					out(:, :, :, p, r) = on_resp(:, :, :, p, r) - baseline;
 				end
 			end
 		end
@@ -83,6 +119,14 @@ classdef Processor < handle
 			% Calculating additional parameters
 			presentation_frames = pre_frames + on_frames + post_frames;
 			repeat_frames = presentation_frames .* obj.stimulus_data.n_presentations;
+		end
+
+		function out = getProcessedData(obj)
+			out = obj.data;
+		end
+
+		function out = getStimdat(obj)
+			out = obj.stimulus_data;
 		end
 	end
 end
